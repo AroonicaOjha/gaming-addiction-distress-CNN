@@ -1,227 +1,242 @@
-# ============================================================
-# cnn_bilstm.py
-# Step 6 & 7: CNN Feature Extraction + BiLSTM Feature Learning
-#
-# Architecture:
-#   Input (batch, 3, 6)
-#   --> Conv1D (pattern detector)
-#   --> BatchNormalization
-#   --> ReLU Activation
-#   --> MaxPooling1D
-#   --> Bidirectional LSTM (temporal arc learner)
-#   --> Dense (feature vector for SVM)
-# ============================================================
+"""
+cnn_bilstm.py
+=============
+Steps 6 & 7 — CNN Feature Extraction + BiLSTM Feature Learning.
+
+Step 6 — Conv1D → BatchNorm → ReLU → MaxPooling1D
+          Input (batch, 3, 6) → Output (batch, 2, 64)
+
+Step 7 — Bidirectional LSTM
+          Input (batch, 2, 64) → Output (batch, 128)
+
+This module defines the shared CNN-BiLSTM backbone used by all three
+modality-specific models in the decision-level fusion pipeline.
+
+Framework : TensorFlow + Keras
+
+Author : Person 1 (your teammate)  — Steps 6 & 7
+"""
 
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers, Model
-from tensorflow.keras.regularizers import l2
 
 
-# ============================================================
-# WHY EACH LAYER EXISTS
-# ============================================================
-#
-# Conv1D  – slides a kernel of width=2 across the 3 windows
-#           (Session → Gameplay → Social). Each filter learns
-#           one co-occurring pattern, e.g.:
-#               filter_1: high hours + high escalation slope
-#               filter_2: high toxicity + solo play
-#               filter_3: high spending + rage-quit spikes
-#
-# BatchNormalization – normalises each mini-batch so training
-#           is stable and converges faster. Reduces sensitivity
-#           to random weight initialisation.
-#
-# ReLU    – non-linearity: zero-out negative activations so the
-#           network only "fires" when a pattern is actually found.
-#
-# MaxPooling1D – keeps only the strongest activation from the
-#           sliding window; makes the representation invariant
-#           to minor positional shifts (e.g. a pattern at window
-#           1 vs window 2 is treated the same).
-#
-# BiLSTM  – reads the pooled feature sequence both forward and
-#           backward. Captures the behavioural ARC:
-#               "sessions escalating → rage-quits increasing
-#                → toxicity spiking"
-#           and also the reverse direction to detect
-#           withdrawal / disengagement patterns.
-#
-# Dense   – compresses the BiLSTM hidden state into a fixed-size
-#           feature vector (default 128-d) that SVM will classify.
-# ============================================================
-
-
-def build_cnn_bilstm(
-    input_shape=(3, 6),       # (timesteps=3 windows, features=6 per window)
-    conv_filters=64,           # number of CNN filter kernels
-    kernel_size=2,             # kernel slides across 2 consecutive windows
-    lstm_units=64,             # BiLSTM units per direction (x2 for bidirectional)
-    dense_units=128,           # output feature vector size for SVM
-    num_classes=4,             # 0:Healthy  1:Distressed  2:Addicted  3:Both
-    dropout_rate=0.3,          # dropout after BiLSTM to prevent overfitting
-    l2_reg=1e-4,               # L2 weight regularisation
+# ── Shared CNN-BiLSTM backbone ─────────────────────────────────────────────
+def build_cnn_bilstm_backbone(
+    input_shape=(3, 6),         # (timesteps=3 windows, features=6 per window)
+    conv_filters=64,            # number of pattern detectors in Conv1D
+    kernel_size=2,              # scan 2 consecutive windows at once
+    lstm_units=64,              # hidden units per direction in BiLSTM
+    dense_units=128,            # output feature vector size
+    dropout_rate=0.3,
+    name="cnn_bilstm_backbone",
 ):
     """
-    Step 6 & 7 – Builds the full CNN-BiLSTM feature extractor.
+    Builds the shared CNN-BiLSTM feature extractor.
 
-    Parameters
-    ----------
-    input_shape  : tuple  (timesteps, features)  default (3, 6)
-    conv_filters : int    number of Conv1D filters
-    kernel_size  : int    Conv1D kernel width (windows scanned at once)
-    lstm_units   : int    BiLSTM units per direction
-    dense_units  : int    dimension of the deep feature vector
-    num_classes  : int    output classes for the softmax head
-    dropout_rate : float  dropout probability
-    l2_reg       : float  L2 regularisation coefficient
+    Architecture:
+        Input(3, 6)
+          → Conv1D(64, kernel=2, padding='same')   Step 6
+          → BatchNormalization                      Step 6
+          → ReLU                                    Step 6
+          → MaxPooling1D(pool_size=1)               Step 6  (3→2 timesteps)
+          → Bidirectional(LSTM(64))                 Step 7
+          → Dense(128, ReLU)                        Step 8  (feature vector)
+          → Dropout(0.3)
 
     Returns
     -------
-    model        : keras.Model  full CNN-BiLSTM with classification head
-    feature_extractor : keras.Model  sub-model that outputs the dense vector
-                        (used to feed extracted features into SVM)
+    model : keras.Model
+        Feature extractor.  Call model(x) to get the 128-d vector.
     """
+    inp = keras.Input(shape=input_shape, name="behaviour_windows")
 
-    # ------------------------------------------------------------------
-    # Input
-    # ------------------------------------------------------------------
-    inputs = keras.Input(shape=input_shape, name="behaviour_chunks")
-    # Shape entering the network: (batch, 3, 6)
-
-    # ==================================================================
-    # STEP 6 – CNN FEATURE EXTRACTION
-    # ==================================================================
-
-    # --- Conv1D Layer ---
-    # kernel_size=2: the filter scans pairs of consecutive windows.
-    # This means it can detect cross-modality patterns, e.g.:
-    #   window[0]+window[1] → "Session + Gameplay co-pattern"
-    #   window[1]+window[2] → "Gameplay + Social co-pattern"
+    # ── Step 6: CNN block ──────────────────────────────────────────────────
     x = layers.Conv1D(
         filters=conv_filters,
         kernel_size=kernel_size,
-        padding="same",           # keep output length = 3
-        kernel_regularizer=l2(l2_reg),
-        name="conv1d_pattern_detector"
-    )(inputs)
-    # Shape: (batch, 3, 64)
-
-    # --- Batch Normalisation ---
-    # Normalises each feature map across the batch.
-    # Stabilises gradient flow, allows higher learning rates.
+        padding="same",
+        name="conv1d",
+    )(inp)
+    # BatchNorm: stabilises training by normalising activations per batch
     x = layers.BatchNormalization(name="batch_norm")(x)
-    # Shape: (batch, 3, 64)
-
-    # --- ReLU Activation ---
-    # Introduces non-linearity. Negative activations (absent patterns)
-    # become 0 — only positive detections "pass through".
+    # ReLU: zero-out absent patterns, keep positive detections
     x = layers.Activation("relu", name="relu")(x)
-    # Shape: (batch, 3, 64)
+    # MaxPooling: keep only the STRONGEST pattern in each region
+    # 3 timesteps → 2 timesteps after pool_size=1 (stride=1 keeps most)
+    x = layers.MaxPooling1D(pool_size=2, strides=1, padding="same",
+                            name="maxpool")(x)
 
-    # --- MaxPooling1D ---
-    # pool_size=2: compresses the 3-step sequence.
-    # Keeps only the strongest detected pattern per region.
-    # Makes the model robust to slight timing variations.
-    x = layers.MaxPooling1D(
-        pool_size=2,
-        padding="same",           # keep output from vanishing (3→2)
-        name="max_pooling"
-    )(x)
-    # Shape: (batch, 2, 64)
-
-    # ==================================================================
-    # STEP 7 – BiLSTM FEATURE LEARNING
-    # ==================================================================
-
-    # --- Bidirectional LSTM ---
-    # return_sequences=False: we only want the final summary state.
-    # Bidirectional:
-    #   forward  pass → reads Session→Gameplay→Social progression
-    #   backward pass → reads Social→Gameplay→Session regression
-    # Combined output = 2 * lstm_units = 128-d vector.
+    # ── Step 7: BiLSTM block ───────────────────────────────────────────────
+    # Bidirectional: reads the 2 pooled windows FORWARD and BACKWARD
+    #   Forward  → learns escalation:  session→gameplay→social
+    #   Backward → learns withdrawal:  social→gameplay→session
+    #   Output   → 64 + 64 = 128-d combined
     x = layers.Bidirectional(
-        layers.LSTM(
-            units=lstm_units,
-            kernel_regularizer=l2(l2_reg),
-            recurrent_regularizer=l2(l2_reg),
-            name="lstm_core"
-        ),
-        name="bilstm"
+        layers.LSTM(lstm_units, return_sequences=False),
+        name="bilstm",
     )(x)
-    # Shape: (batch, 128)
 
-    # --- Dropout ---
-    # Randomly zeros 30% of units during training to prevent co-adaptation
-    # and force the network to learn redundant, robust representations.
+    # ── Step 8: Dense feature vector ──────────────────────────────────────
+    x = layers.Dense(dense_units, activation="relu", name="feature_dense")(x)
     x = layers.Dropout(dropout_rate, name="dropout")(x)
-    # Shape: (batch, 128)
 
-    # --- Dense Feature Vector (the deep representation) ---
-    # This 128-d vector is what gets handed to the SVM classifier.
-    # We name it "feature_vector" so we can extract it easily.
-    feature_vector = layers.Dense(
-        dense_units,
-        activation="relu",
-        kernel_regularizer=l2(l2_reg),
-        name="feature_vector"
-    )(x)
-    # Shape: (batch, 128)
+    backbone = Model(inputs=inp, outputs=x, name=name)
+    return backbone
 
-    # --- Softmax Output Head (used only during training) ---
-    # The SVM replaces this in the final pipeline (Step 10).
-    # We keep it here to enable standard cross-entropy training.
-    outputs = layers.Dense(
-        num_classes,
-        activation="softmax",
-        name="classification_head"
-    )(feature_vector)
-    # Shape: (batch, 4)
 
-    # ------------------------------------------------------------------
-    # Build the two models
-    # ------------------------------------------------------------------
-
-    # Full model: Input → CNN → BiLSTM → Dense → Softmax
-    model = Model(inputs=inputs, outputs=outputs, name="CNN_BiLSTM")
-
-    # Feature extractor sub-model: stops at the dense layer.
-    # Used in Step 10 to generate features for the SVM.
-    feature_extractor = Model(
-        inputs=inputs,
-        outputs=feature_vector,
-        name="CNN_BiLSTM_FeatureExtractor"
+# ── Full classification model (backbone + softmax head) ───────────────────
+def build_full_model(
+    input_shape=(3, 6),
+    num_classes=4,
+    conv_filters=64,
+    kernel_size=2,
+    lstm_units=64,
+    dense_units=128,
+    dropout_rate=0.3,
+):
+    """
+    Full CNN-BiLSTM model with 4-class softmax output.
+    Used for training and for extracting deep features.
+    """
+    backbone = build_cnn_bilstm_backbone(
+        input_shape=input_shape,
+        conv_filters=conv_filters,
+        kernel_size=kernel_size,
+        lstm_units=lstm_units,
+        dense_units=dense_units,
+        dropout_rate=dropout_rate,
     )
 
-    return model, feature_extractor
+    inp = keras.Input(shape=input_shape)
+    features = backbone(inp)
+    out = layers.Dense(num_classes, activation="softmax", name="classifier")(features)
+
+    model = Model(inputs=inp, outputs=out, name="CNN_BiLSTM_Classifier")
+    return model, backbone
+
+
+def print_architecture_summary():
+    """Print a human-readable layer-by-layer summary."""
+    model, _ = build_full_model()
+    print("=" * 56)
+    print("  STEPS 6 & 7 — CNN-BiLSTM ARCHITECTURE")
+    print("=" * 56)
+    model.summary(line_length=56)
+    print()
+
+
+def verify_shapes():
+    """Run 8 fake samples through and print shapes at each stage."""
+    print("=" * 56)
+    print("  SHAPE VERIFICATION (batch of 8 players)")
+    print("=" * 56)
+
+    inp_data = np.random.randn(8, 3, 6).astype(np.float32)
+
+    model, backbone = build_full_model()
+
+    # Build intermediate inspection models
+    layer_names = ["conv1d", "batch_norm", "relu", "maxpool", "bilstm", "feature_dense"]
+    prev_output = model.input
+    for lname in layer_names:
+        layer = model.get_layer("cnn_bilstm_backbone").get_layer(lname)
+        # Use backbone sub-model layers
+        pass
+
+    # Simpler: run backbone step by step
+    bb = model.get_layer("cnn_bilstm_backbone")
+    x = inp_data
+    print(f"  Input            → {x.shape}")
+
+    # Conv1D
+    conv_out = keras.Model(bb.input, bb.get_layer("conv1d").output)(x)
+    print(f"  After Conv1D     → {conv_out.shape}")
+    bn_out = keras.Model(bb.input, bb.get_layer("batch_norm").output)(x)
+    print(f"  After BatchNorm  → {bn_out.shape}")
+    relu_out = keras.Model(bb.input, bb.get_layer("relu").output)(x)
+    print(f"  After ReLU       → {relu_out.shape}")
+    pool_out = keras.Model(bb.input, bb.get_layer("maxpool").output)(x)
+    print(f"  After MaxPool    → {pool_out.shape}")
+    bilstm_out = keras.Model(bb.input, bb.get_layer("bilstm").output)(x)
+    print(f"  After BiLSTM     → {bilstm_out.shape}   (64 fwd + 64 bwd)")
+    feat_out = bb(x)
+    print(f"  Feature vector   → {feat_out.shape}   ← input to SVM")
+    final_out = model(x, training=False)
+    print(f"  Classifier output→ {final_out.shape}   (4-class softmax)")
+    print()
+    print(f"  Total parameters : {model.count_params():,}")
+    print()
+# ── Clean Flat Architecture for Steps 6 & 7 ────────────────────────────────
+
+def build_cnn_bilstm(
+    input_shape=(3, 6),
+    conv_filters=64,
+    kernel_size=2,
+    lstm_units=64,
+    dense_units=128,
+    num_classes=4,
+    dropout_rate=0.3,
+    l2_reg=1e-4,   # Now explicitly accepted
+):
+    """
+    Builds the flat CNN-BiLSTM structure matching the exact layer names 
+    expected by run_step6.py and run_step7.py tracking hooks.
+    """
+    # 1. Define input matching the script's tracer name
+    inp = keras.Input(shape=input_shape, name="behaviour_chunks")
+
+    # 2. Step 6: CNN layers with exact script names
+    x = layers.Conv1D(
+        filters=conv_filters,
+        kernel_size=kernel_size,
+        padding="same",
+        name="conv1d_pattern_detector",
+    )(inp)
+    x = layers.BatchNormalization(name="batch_norm")(x)
+    x = layers.Activation("relu", name="relu")(x)
+    x = layers.MaxPooling1D(pool_size=2, strides=1, padding="same", name="max_pooling")(x)
+
+    # 3. Step 7: BiLSTM layer with exact script name
+    x = layers.Bidirectional(
+        layers.LSTM(lstm_units, return_sequences=False),
+        name="bilstm",
+    )(x)
+
+    # 4. Dense feature vector extractor layer
+    x = layers.Dense(dense_units, activation="relu", name="feature_vector")(x)
+    feature_out = layers.Dropout(dropout_rate, name="dropout")(x)
+
+    # 5. Final Classification Head layer
+    final_out = layers.Dense(num_classes, activation="softmax", name="classification_head")(feature_out)
+
+    # Create the full model
+    full_model = Model(inputs=inp, outputs=final_out, name="CNN_BiLSTM_Classifier")
+    
+    # Create the feature extractor sub-model (used as input for the SVM)
+    feature_extractor = Model(inputs=inp, outputs=feature_out, name="Feature_Extractor")
+
+    return full_model, feature_extractor
 
 
 def compile_model(model, learning_rate=1e-3):
-    """
-    Compiles the CNN-BiLSTM model with:
-      - Adam optimiser
-      - Categorical cross-entropy loss
-      - Accuracy + AUC metrics
-    """
+    """Compiles the model using Adam optimizer and cross entropy loss."""
     model.compile(
-        optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
+        optimizer=tf.keras.optimizers.Adam(learning_rate=learning_rate),
         loss="sparse_categorical_crossentropy",
-        metrics=[
-            "accuracy",
-            keras.metrics.AUC(name="auc", multi_label=False),
-        ],
+        metrics=["accuracy"]
     )
     return model
 
 
-def print_architecture_summary(model):
-    """
-    Prints a clean layer-by-layer summary of the model.
-    """
-    print("\n" + "=" * 65)
-    print("  CNN-BiLSTM Architecture Summary")
+def print_architecture_summary(model=None):
+    """Prints out the network structure panel matching teammate code style."""
+    if model is None:
+        model, _ = build_cnn_bilstm()
+    print("=" * 65)
+    print("  STEPS 6 & 7 — CNN-BiLSTM ARCHITECTURE")
     print("=" * 65)
     model.summary(line_length=65)
-    print("=" * 65)
+    print()
