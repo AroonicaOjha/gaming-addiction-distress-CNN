@@ -1,5 +1,5 @@
 
-# Multimodal Machine Learning Framework for Early Detection of Gaming Addiction & Emotional Distress
+# Advanced Behavioural Machine Learning Framework for Early Detection of Gaming Distress
 
 An active-learning-inspired fusion framework using an end-to-end **CNN-BiLSTM-SVM** pipeline to classify gaming behavioural arcs into distinct psychological states.
 
