@@ -5,7 +5,7 @@ An active-learning-inspired fusion framework using an end-to-end **CNN-BiLSTM-SV
 
 ---
 
-## Pipeline Model Performance
+## Pipeline Model 
 The pipeline extracts temporal feature representations across multiple behavioural windows and classifies player profiles into four states (*Healthy*, *Distressed Only*, *Addicted Only*, or *Both*).
 
 ### Benchmark Matrix (Test Set Evaluation)
@@ -36,7 +36,8 @@ The pipeline extracts temporal feature representations across multiple behaviour
 ├── run_steps_1_to_5.py              # ETL, Scaling, & Stratification
 ├── run_step6.py                     # Structural Layer & Dimension Verification
 ├── run_step7.py                     # Temporal BiLSTM Feature Activation Heatmaps
-├── run_steps_8_to_14.py             #  Network Fusion, Classifier Training & Benchmarks
+├── run_steps_8_to_14.py             # Network Fusion, Classifier Training & Benchmarks
+├── result.py                        # Confusion matrix grid, ROC-AUC scores per class, Precision, Recall & F1-Score Benchmarks
 ├── requirements.txt                 # Exact environment software dependencies
 └── .gitignore                       
 
