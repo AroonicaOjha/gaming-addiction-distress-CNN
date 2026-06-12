@@ -1,14 +1,10 @@
 
 # Advanced Behavioural Machine Learning Framework for Early Detection of Gaming Distress
 
-An active-learning-inspired fusion framework using an end-to-end **CNN-BiLSTM-SVM** pipeline to classify gaming behavioural arcs into distinct psychological states.
+An active-learning-inspired fusion framework using an end-to-end **CNN-BiLSTM-SVM** pipeline to classify gaming behavioural data into distinct psychological states.
+The system categorizes user states into four classes: *Healthy*, *Distressed Only*, *Addicted Only*, or *Both*.
 
----
-
-## Pipeline Model 
-The pipeline extracts temporal feature representations across multiple behavioural windows and classifies player profiles into four states (*Healthy*, *Distressed Only*, *Addicted Only*, or *Both*).
-
-### Benchmark Matrix (Test Set Evaluation)
+### Performance Metrics
 
 | Model Architecture | Balanced Accuracy | F1-Score | Global Accuracy | Training Time |
 | :--- | :---: | :---: | :---: | :---: |
@@ -22,29 +18,6 @@ The pipeline extracts temporal feature representations across multiple behaviour
 * **Macro Precision**: `0.8578`
 * **Macro Recall**: `0.8798`
 
----
-
-# Structure 
-
-```text
-├── data/                            # Local datasets and model-ready matrix splits
-├── src/                             # Shared processing & feature engineering modules
-│   ├── preprocessing.py             # Data loading and standard scaling pipelines
-│   ├── eda.py                       # Exploratory analysis visualization hooks
-│   ├── chunking.py                  # Sliding-window behavioural extraction
-│   └── cnn_bilstm.py                # Core flat CNN-BiLSTM feature extractor blocks
-├── run_steps_1_to_5.py              # ETL, Scaling, & Stratification
-├── run_step6.py                     # Structural Layer & Dimension Verification
-├── run_step7.py                     # Temporal BiLSTM Feature Activation Heatmaps
-├── run_steps_8_to_14.py             # Network Fusion, Classifier Training & Benchmarks
-├── result.py                        # Confusion matrix grid, ROC-AUC scores per class, Precision, Recall & F1-Score Benchmarks
-├── requirements.txt                 # Exact environment software dependencies
-└── .gitignore                       
-
-
-# Division
-Steps 1–7: Handled raw data extraction, cleaning operations, data visualization, behavioural sequence chunking, and baseline tensor structural validations.
-Steps 8–14: Implemented the primary deep-learning execution framework, extracted temporal state embeddings, constructed the dense classification framework, engineered the standalone SVM ensemble blocks, and compiled the competitive model benchmarks.
 
 
 
